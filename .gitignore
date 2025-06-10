@@ -1,0 +1,21 @@
+# Environment variables
+.env
+
+# Binary files
+telegram-bot
+
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo 
