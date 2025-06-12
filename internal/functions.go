@@ -1315,7 +1315,13 @@ func executeJavaScriptDirect(db *DB, userID int, parameters map[string]interface
 		}
 	}
 
+	// Get input data if provided
+	inputData, _ := parameters["inputData"].(string)
+
 	log.Printf("⚡ EXECUTING JAVASCRIPT (DIRECT) for user %d: %s", userID, code)
+	if inputData != "" {
+		log.Printf("📥 Input data provided: %.100s...", inputData)
+	}
 
 	// Try to auto-fix common JavaScript errors
 	fixedCode, wasFixed := autoFixJavaScript(code)
@@ -1857,6 +1863,32 @@ func executeJavaScriptDirect(db *DB, userID int, parameters map[string]interface
 
 	vm.Set("teamwork", teamworkAPI)
 
+	// Set inputData variable if provided (legacy support)
+	if inputData != "" {
+		vm.Set("inputData", inputData)
+		log.Printf("📥 Set inputData variable in JavaScript: %.100s...", inputData)
+	} else {
+		vm.Set("inputData", goja.Undefined())
+	}
+
+	// Set prev_output array with data from previous output() calls
+	prevOutputArray, hasPrevOutput := parameters["prev_output"].([]interface{})
+	if hasPrevOutput && len(prevOutputArray) > 0 {
+		// Convert to string array for JavaScript
+		var jsArray []string
+		for _, item := range prevOutputArray {
+			if itemStr, ok := item.(string); ok {
+				jsArray = append(jsArray, itemStr)
+			} else {
+				jsArray = append(jsArray, fmt.Sprintf("%v", item))
+			}
+		}
+		vm.Set("prev_output", jsArray)
+		log.Printf("📥 Set prev_output array in JavaScript with %d items", len(jsArray))
+	} else {
+		vm.Set("prev_output", []string{})
+	}
+
 	// Execute code with timeout handling
 	resultChan := make(chan interface{}, 1)
 	errChan := make(chan error, 1)
@@ -1895,12 +1927,12 @@ func executeJavaScriptDirect(db *DB, userID int, parameters map[string]interface
 			response["messages"] = userMessages
 		}
 
-		// Add output data if any
+		// Add output data if any (as array, not joined string)
 		if len(outputData) > 0 {
-			response["output"] = strings.Join(outputData, "\n")
+			response["output"] = outputData
 		}
 
-		// If no specific outputs, include execution result
+		// If no specific outputs, include execution result as array for consistency
 		if len(outputData) == 0 && len(userMessages) == 0 {
 			var resultStr string
 			if result == nil {
@@ -1912,7 +1944,7 @@ func executeJavaScriptDirect(db *DB, userID int, parameters map[string]interface
 					resultStr = fmt.Sprintf("%v", result)
 				}
 			}
-			response["output"] = resultStr
+			response["output"] = []string{resultStr}
 		}
 
 		// Return JSON response with messages and/or output

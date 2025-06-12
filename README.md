@@ -199,7 +199,7 @@ make help  # Shows all available commands
 ## Features
 
 ### 🤖 AI-Powered Responses
-- **ChatGPT Integration**: Uses OpenAI GPT-4o for intelligent responses
+- **Multi-AI Integration**: Supports both OpenAI GPT-4o and Anthropic Claude-3 Opus for intelligent responses
 - **Audio Transcription**: Automatically converts voice messages to text using OpenAI Whisper API
 - **Context-Aware**: Maintains context about the development team and project
 - **Fallback Support**: Gracefully falls back to static responses if AI is unavailable
@@ -288,8 +288,9 @@ type AIProvider interface {
 ```
 
 Currently supported:
-- **OpenAI GPT-4o** - Primary AI provider for text generation
-- **OpenAI Whisper** - Audio transcription via the same API
+- **OpenAI GPT-4o** - Advanced AI for text generation and conversations
+- **Anthropic Claude-3 Opus** - Excellent for code generation and reasoning
+- **OpenAI Whisper** - Audio transcription (Note: Claude doesn't support audio)
 
 Future providers can be easily added by implementing the `AIProvider` interface.
 
@@ -309,7 +310,9 @@ Future providers can be easily added by implementing the `AIProvider` interface.
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `TELEGRAM_API_TOKEN` | Telegram Bot API token | - | ✅ |
-| `OPENAI_API_KEY` | OpenAI API key for GPT-4o | - | For AI features |
+| `OPENAI_API_KEY` | OpenAI API key for GPT-4o | - | For OpenAI features |
+| `ANTHROPIC_API_KEY` | Anthropic API key for Claude | - | For Claude features |
+| `AI_PROVIDER` | AI provider to use: `openai` or `anthropic` | `openai` | No |
 | `AI_ENABLED` | Enable/disable AI features | `true` | No |
 | `DEBUG_MODE` | Enable debug logging | `true` | No |
 | `UPDATE_TIMEOUT` | Telegram update timeout | `60` | No |

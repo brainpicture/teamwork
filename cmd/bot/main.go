@@ -21,10 +21,37 @@ func main() {
 
 	// Initialize AI service
 	var aiService *internal.AIService
-	if config.AIEnabled && config.OpenAIAPIKey != "" {
-		openAIProvider := internal.NewOpenAIProvider(config.OpenAIAPIKey)
-		aiService = internal.NewAIService(openAIProvider, true)
-		log.Println("AI service initialized with OpenAI GPT-4o")
+	if config.AIEnabled {
+		switch config.AIProvider {
+		case "anthropic", "claude":
+			if config.AnthropicAPIKey != "" {
+				claudeProvider := internal.NewClaudeProvider(config.AnthropicAPIKey)
+				aiService = internal.NewAIService(claudeProvider, true)
+				log.Println("AI service initialized with Anthropic Claude-3 Opus")
+			} else {
+				log.Println("Anthropic API key not provided, AI service disabled")
+				aiService = internal.NewAIService(nil, false)
+			}
+		case "openai", "":
+			if config.OpenAIAPIKey != "" {
+				openAIProvider := internal.NewOpenAIProvider(config.OpenAIAPIKey)
+				aiService = internal.NewAIService(openAIProvider, true)
+				log.Println("AI service initialized with OpenAI GPT-4o")
+			} else {
+				log.Println("OpenAI API key not provided, AI service disabled")
+				aiService = internal.NewAIService(nil, false)
+			}
+		default:
+			log.Printf("Unknown AI provider '%s', defaulting to OpenAI", config.AIProvider)
+			if config.OpenAIAPIKey != "" {
+				openAIProvider := internal.NewOpenAIProvider(config.OpenAIAPIKey)
+				aiService = internal.NewAIService(openAIProvider, true)
+				log.Println("AI service initialized with OpenAI GPT-4o (fallback)")
+			} else {
+				log.Println("No valid AI provider available, AI service disabled")
+				aiService = internal.NewAIService(nil, false)
+			}
+		}
 	} else {
 		aiService = internal.NewAIService(nil, false)
 		log.Println("AI service disabled")

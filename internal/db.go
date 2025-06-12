@@ -165,8 +165,10 @@ func LoadConfig() *Config {
 		DBName:     getEnvStr("DB_NAME", "teamwork"),
 
 		// AI settings
-		OpenAIAPIKey: openAIKey,
-		AIEnabled:    aiEnabled,
+		OpenAIAPIKey:    openAIKey,
+		AnthropicAPIKey: getEnvStr("ANTHROPIC_API_KEY", ""),
+		AIProvider:      getEnvStr("AI_PROVIDER", "openai"),
+		AIEnabled:       aiEnabled,
 	}
 
 	return config
@@ -181,8 +183,22 @@ func LoadConfigForBot() *Config {
 		log.Fatal("TELEGRAM_API_TOKEN is required")
 	}
 
-	if config.OpenAIAPIKey == "" {
-		log.Println("Warning: OPENAI_API_KEY not set, AI features will be disabled")
+	if config.AIEnabled {
+		switch config.AIProvider {
+		case "anthropic", "claude":
+			if config.AnthropicAPIKey == "" {
+				log.Println("Warning: ANTHROPIC_API_KEY not set, AI features will be disabled")
+			}
+		case "openai", "":
+			if config.OpenAIAPIKey == "" {
+				log.Println("Warning: OPENAI_API_KEY not set, AI features will be disabled")
+			}
+		default:
+			log.Printf("Warning: Unknown AI provider '%s', defaulting to OpenAI", config.AIProvider)
+			if config.OpenAIAPIKey == "" {
+				log.Println("Warning: OPENAI_API_KEY not set, AI features will be disabled")
+			}
+		}
 	}
 
 	return config

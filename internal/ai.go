@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/sashabaranov/go-openai"
+	anthropic "github.com/unfunco/anthropic-sdk-go"
 )
 
 // AIProvider interface for different AI providers
@@ -25,12 +26,28 @@ type OpenAIProvider struct {
 	model  string
 }
 
+// ClaudeProvider implementation for Anthropic Claude
+type ClaudeProvider struct {
+	client *anthropic.Client
+	model  string
+}
+
 // NewOpenAIProvider creates a new OpenAI provider
 func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	client := openai.NewClient(apiKey)
 	return &OpenAIProvider{
 		client: client,
 		model:  openai.GPT4o, // Using GPT-4o as requested
+	}
+}
+
+// NewClaudeProvider creates a new Anthropic Claude provider
+func NewClaudeProvider(apiKey string) *ClaudeProvider {
+	transport := &anthropic.Transport{APIKey: apiKey}
+	client := anthropic.NewClient(transport.Client())
+	return &ClaudeProvider{
+		client: client,
+		model:  string(anthropic.Claude3Opus20240229), // Using Claude-3 Opus (most powerful available)
 	}
 }
 
@@ -402,5 +419,148 @@ func (s *AIService) FormatDataResponse(ctx context.Context, userQuery string, fu
 
 	response := choice.Message.Content
 	log.Printf("AI Data formatting response generated: %d characters", len(response))
+	return response, nil
+}
+
+// GenerateResponse generates a response using Anthropic Claude
+func (p *ClaudeProvider) GenerateResponse(ctx context.Context, prompt string) (string, error) {
+	resp, _, err := p.client.Messages.Create(ctx, &anthropic.CreateMessageInput{
+		Model:     anthropic.LanguageModel(p.model),
+		MaxTokens: 500,
+		System:    GetSystemPrompt(),
+		Messages: []anthropic.Message{
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
+		Temperature: &[]float64{0.7}[0],
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("Claude API error: %v", err)
+	}
+
+	if len(resp.Content) == 0 {
+		return "", fmt.Errorf("no response from Claude")
+	}
+
+	response := resp.Content[0].Text
+	log.Printf("Claude Response generated: %d characters", len(response))
+	return response, nil
+}
+
+// GenerateWelcomeMessage generates a personalized welcome message
+func (p *ClaudeProvider) GenerateWelcomeMessage(ctx context.Context, userName, status, timestamp string) (string, error) {
+	prompt := fmt.Sprintf(WelcomePromptTemplate, userName, status, timestamp)
+	return p.GenerateResponse(ctx, prompt)
+}
+
+// GenerateErrorMessage generates a user-friendly error message
+func (p *ClaudeProvider) GenerateErrorMessage(ctx context.Context, errorContext string) (string, error) {
+	prompt := fmt.Sprintf(ErrorPromptTemplate, errorContext)
+	return p.GenerateResponse(ctx, prompt)
+}
+
+// TranscribeAudio - Claude doesn't support audio transcription, fallback to OpenAI
+func (p *ClaudeProvider) TranscribeAudio(ctx context.Context, audioData io.Reader, filename string) (string, error) {
+	return "", fmt.Errorf("audio transcription not supported by Claude provider - use OpenAI Whisper")
+}
+
+// GenerateResponseWithContext generates a response using Anthropic Claude with conversation history
+func (p *ClaudeProvider) GenerateResponseWithContext(ctx context.Context, prompt string, history []*Message) (string, error) {
+	// Build message history
+	messages := []anthropic.Message{}
+
+	// Add conversation history
+	for _, msg := range history {
+		role := "user"
+		if msg.Role == "assistant" {
+			role = "assistant"
+		}
+
+		messages = append(messages, anthropic.Message{
+			Role:    role,
+			Content: msg.Content,
+		})
+	}
+
+	// Add current user message
+	messages = append(messages, anthropic.Message{
+		Role:    "user",
+		Content: prompt,
+	})
+
+	resp, _, err := p.client.Messages.Create(ctx, &anthropic.CreateMessageInput{
+		Model:       anthropic.LanguageModel(p.model),
+		MaxTokens:   500,
+		System:      GetSystemPrompt(),
+		Messages:    messages,
+		Temperature: &[]float64{0.7}[0],
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("Claude API error: %v", err)
+	}
+
+	if len(resp.Content) == 0 {
+		return "", fmt.Errorf("no response from Claude")
+	}
+
+	response := resp.Content[0].Text
+	log.Printf("Claude Response with context generated: %d characters, history: %d messages", len(response), len(history))
+	return response, nil
+}
+
+// GenerateResponseWithContextAndProject generates a response using Anthropic Claude with conversation history and current project context
+func (p *ClaudeProvider) GenerateResponseWithContextAndProject(ctx context.Context, prompt string, history []*Message, currentProject *Project) (string, error) {
+	// Build enhanced system prompt with current project info
+	systemPrompt := GetSystemPrompt()
+	if currentProject != nil {
+		projectInfo := fmt.Sprintf("\n\nТЕКУЩИЙ ПРОЕКТ ПОЛЬЗОВАТЕЛЯ:\n- ID: %d\n- Название: %s\n- Описание: %s\n- Статус: %s\n- Роль пользователя: %s\n\nПри создании задач используй этот проект по умолчанию, если пользователь не указал другой проект явно.",
+			currentProject.ID, currentProject.Title, currentProject.Description, currentProject.Status, currentProject.UserRole)
+		systemPrompt += projectInfo
+	}
+
+	// Build message history
+	messages := []anthropic.Message{}
+
+	// Add conversation history
+	for _, msg := range history {
+		role := "user"
+		if msg.Role == "assistant" {
+			role = "assistant"
+		}
+
+		messages = append(messages, anthropic.Message{
+			Role:    role,
+			Content: msg.Content,
+		})
+	}
+
+	// Add current user message
+	messages = append(messages, anthropic.Message{
+		Role:    "user",
+		Content: prompt,
+	})
+
+	resp, _, err := p.client.Messages.Create(ctx, &anthropic.CreateMessageInput{
+		Model:       anthropic.LanguageModel(p.model),
+		MaxTokens:   500,
+		System:      systemPrompt,
+		Messages:    messages,
+		Temperature: &[]float64{0.7}[0],
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("Claude API error: %v", err)
+	}
+
+	if len(resp.Content) == 0 {
+		return "", fmt.Errorf("no response from Claude")
+	}
+
+	response := resp.Content[0].Text
+	log.Printf("Claude Response with context and project generated: %d characters, history: %d messages", len(response), len(history))
 	return response, nil
 }

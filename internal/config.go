@@ -15,6 +15,8 @@ type Config struct {
 	DBName     string
 
 	// AI settings
-	OpenAIAPIKey string
-	AIEnabled    bool
+	OpenAIAPIKey    string
+	AnthropicAPIKey string
+	AIProvider      string // "openai" or "anthropic"
+	AIEnabled       bool
 }
