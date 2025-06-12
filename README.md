@@ -200,15 +200,22 @@ make help  # Shows all available commands
 
 ### 🤖 AI-Powered Responses
 - **ChatGPT Integration**: Uses OpenAI GPT-4o for intelligent responses
+- **Audio Transcription**: Automatically converts voice messages to text using OpenAI Whisper API
 - **Context-Aware**: Maintains context about the development team and project
 - **Fallback Support**: Gracefully falls back to static responses if AI is unavailable
 - **Personalized Welcome**: AI-generated welcome messages for new users
 - **Typing Indicator**: Shows "typing..." while AI generates responses for better UX
 
+### 🎤 Audio Message Support
+- **Voice Message Recognition**: Send voice messages to the bot for automatic speech-to-text conversion
+- **Audio File Support**: Upload audio files (MP3, OGG, etc.) for transcription
+- **Automatic Processing**: Transcribed text is automatically processed as if it were a text message
+- **Multi-format Support**: Supports various audio formats including OGG (voice messages), MP3, WAV, etc.
+- **Smart Timeout**: Extended timeout (60 seconds) for audio processing vs 30 seconds for text
+
 ### 📋 Project Management
-- **Create Projects**: Add new projects with title, description, priority, and deadline
+- **Create Projects**: Add new projects with title and description
 - **Project Status**: Track project status (planning, active, paused, completed, cancelled)
-- **Priority Levels**: Set priority levels (low, medium, high, urgent)
 - **User Ownership**: Each user manages their own projects
 - **Project Listing**: View all projects or filter by status
 - **CRUD Operations**: Full create, read, update, delete functionality
@@ -259,15 +266,11 @@ CREATE TABLE users (
 ```sql
 CREATE TABLE projects (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
     status ENUM('planning', 'active', 'paused', 'completed', 'cancelled'),
-    priority ENUM('low', 'medium', 'high', 'urgent'),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    deadline DATE NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 ```
 
@@ -280,22 +283,26 @@ type AIProvider interface {
     GenerateResponse(ctx context.Context, prompt string) (string, error)
     GenerateWelcomeMessage(ctx context.Context, userName, status, timestamp string) (string, error)
     GenerateErrorMessage(ctx context.Context, errorContext string) (string, error)
+    TranscribeAudio(ctx context.Context, audioData io.Reader, filename string) (string, error)
 }
 ```
 
 Currently supported:
-- **OpenAI GPT-4o** - Primary AI provider
+- **OpenAI GPT-4o** - Primary AI provider for text generation
+- **OpenAI Whisper** - Audio transcription via the same API
 
 Future providers can be easily added by implementing the `AIProvider` interface.
 
 ## Usage
 
 - **Regular Messages**: Send any message to get an AI-powered response with typing indicator
+- **Voice Messages**: Send voice messages that are automatically transcribed and processed as text
+- **Audio Files**: Upload audio files in supported formats (MP3, OGG, WAV, etc.) for transcription
 - **New Users**: Automatically receive a personalized AI-generated welcome message
 - **Start Command**: Send `/start` to get a welcome message anytime
 - **Project Commands**: Use `/projects`, `/project_add`, etc. for project management
 - **Fallback Mode**: If AI is disabled, the bot provides friendly static responses
-- **Visual Feedback**: Typing indicator shows while AI is thinking (up to 30 seconds for regular messages, 15 seconds for welcome messages)
+- **Visual Feedback**: Typing indicator shows while AI is thinking (up to 30 seconds for regular messages, 60 seconds for audio transcription, 15 seconds for welcome messages)
 
 ## Configuration Options
 

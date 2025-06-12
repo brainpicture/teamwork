@@ -18,12 +18,23 @@ type DB struct {
 
 // User represents a user in the database
 type User struct {
-	ID     int
-	TgID   int64
-	TgName string
-	Email  string
-	Name   string
-	TS     time.Time
+	ID               int
+	TgID             int64
+	TgName           string
+	Email            string
+	Name             string
+	CurrentProjectID *int // Pointer to allow NULL values
+	TS               time.Time
+}
+
+// Message represents a conversation message in the database
+type Message struct {
+	ID        int
+	UserID    int
+	ChatID    int64
+	Role      string // 'user' or 'assistant'
+	Content   string
+	CreatedAt time.Time
 }
 
 // ConnectDB establishes a connection to the database
@@ -47,8 +58,9 @@ func ConnectDB(config *Config) (*DB, error) {
 // GetUserByTgID retrieves a user by their Telegram ID
 func (db *DB) GetUserByTgID(tgID int64) (*User, error) {
 	user := &User{}
-	err := db.QueryRow("SELECT id, tg_id, tg_name, email, name, ts FROM users WHERE tg_id = ?", tgID).Scan(
-		&user.ID, &user.TgID, &user.TgName, &user.Email, &user.Name, &user.TS,
+	var currentProjectID sql.NullInt64
+	err := db.QueryRow("SELECT id, tg_id, tg_name, email, name, current_project_id, ts FROM users WHERE tg_id = ?", tgID).Scan(
+		&user.ID, &user.TgID, &user.TgName, &user.Email, &user.Name, &currentProjectID, &user.TS,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -56,6 +68,12 @@ func (db *DB) GetUserByTgID(tgID int64) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %v", err)
 	}
+
+	if currentProjectID.Valid {
+		projectID := int(currentProjectID.Int64)
+		user.CurrentProjectID = &projectID
+	}
+
 	return user, nil
 }
 
@@ -86,8 +104,8 @@ func (db *DB) CreateUser(tgID int64, tgName, email, name string) (*User, error) 
 
 // UpdateUser updates an existing user
 func (db *DB) UpdateUser(user *User) error {
-	_, err := db.Exec("UPDATE users SET tg_name = ?, email = ?, name = ? WHERE tg_id = ?",
-		user.TgName, user.Email, user.Name, user.TgID)
+	_, err := db.Exec("UPDATE users SET tg_name = ?, email = ?, name = ?, current_project_id = ? WHERE tg_id = ?",
+		user.TgName, user.Email, user.Name, user.CurrentProjectID, user.TgID)
 	if err != nil {
 		return fmt.Errorf("failed to update user: %v", err)
 	}
@@ -207,4 +225,127 @@ func getEnvInt(key string, defaultValue int) int {
 	}
 
 	return intValue
+}
+
+// SaveMessage saves a message to the database
+func (db *DB) SaveMessage(userID int, chatID int64, role, content string) error {
+	_, err := db.Exec(
+		"INSERT INTO messages (user_id, chat_id, role, content) VALUES (?, ?, ?, ?)",
+		userID, chatID, role, content,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save message: %v", err)
+	}
+	return nil
+}
+
+// GetRecentMessages retrieves the last N messages for a chat
+func (db *DB) GetRecentMessages(chatID int64, limit int) ([]*Message, error) {
+	query := `
+		SELECT id, user_id, chat_id, role, content, created_at 
+		FROM messages 
+		WHERE chat_id = ? 
+		ORDER BY created_at DESC 
+		LIMIT ?
+	`
+
+	rows, err := db.Query(query, chatID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recent messages: %v", err)
+	}
+	defer rows.Close()
+
+	var messages []*Message
+	for rows.Next() {
+		msg := &Message{}
+		err := rows.Scan(&msg.ID, &msg.UserID, &msg.ChatID, &msg.Role, &msg.Content, &msg.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan message: %v", err)
+		}
+		messages = append(messages, msg)
+	}
+
+	// Reverse the slice to get chronological order (oldest first)
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
+}
+
+// CleanupOldMessages removes old messages beyond the limit for a chat
+func (db *DB) CleanupOldMessages(chatID int64, keepCount int) error {
+	query := `
+		DELETE FROM messages 
+		WHERE chat_id = ? 
+		AND id NOT IN (
+			SELECT id FROM (
+				SELECT id FROM messages 
+				WHERE chat_id = ? 
+				ORDER BY created_at DESC 
+				LIMIT ?
+			) AS recent_messages
+		)
+	`
+
+	_, err := db.Exec(query, chatID, chatID, keepCount)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup old messages: %v", err)
+	}
+	return nil
+}
+
+// SetUserCurrentProject sets the current project for a user
+func (db *DB) SetUserCurrentProject(userID, projectID int) error {
+	// First verify that the user has access to this project
+	userRole, err := db.GetUserRoleInProject(projectID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to check project access: %v", err)
+	}
+	if userRole == "" {
+		return fmt.Errorf("user does not have access to this project")
+	}
+
+	_, err = db.Exec("UPDATE users SET current_project_id = ? WHERE id = ?", projectID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to set current project: %v", err)
+	}
+	return nil
+}
+
+// ClearUserCurrentProject clears the current project for a user
+func (db *DB) ClearUserCurrentProject(userID int) error {
+	_, err := db.Exec("UPDATE users SET current_project_id = NULL WHERE id = ?", userID)
+	if err != nil {
+		return fmt.Errorf("failed to clear current project: %v", err)
+	}
+	return nil
+}
+
+// GetUserCurrentProject gets the current project for a user with details
+func (db *DB) GetUserCurrentProject(userID int) (*Project, error) {
+	query := `
+		SELECT p.id, p.title, p.description, p.status, 
+		       p.created_at, p.updated_at, pu.role
+		FROM users u
+		JOIN projects p ON u.current_project_id = p.id
+		JOIN project_users pu ON p.id = pu.project_id AND pu.user_id = u.id
+		WHERE u.id = ? AND u.current_project_id IS NOT NULL
+	`
+
+	project := &Project{}
+	err := db.QueryRow(query, userID).Scan(
+		&project.ID, &project.Title, &project.Description,
+		&project.Status, &project.CreatedAt, &project.UpdatedAt,
+		&project.UserRole,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current project: %v", err)
+	}
+
+	return project, nil
 }

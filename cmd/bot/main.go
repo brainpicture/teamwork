@@ -45,6 +45,10 @@ func main() {
 	updates := bot.GetUpdatesChan(u)
 
 	for update := range updates {
-		internal.HandleUserMessage(bot, db, aiService, update)
+		if update.Message != nil {
+			internal.HandleUserMessage(bot, db, aiService, update)
+		} else if update.CallbackQuery != nil {
+			internal.HandleCallbackQuery(bot, db, update.CallbackQuery)
+		}
 	}
 }

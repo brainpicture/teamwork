@@ -1,4 +1,4 @@
-.PHONY: run build clean db-init db-migrate db-reset db-check db-status help
+.PHONY: run build clean db-init db-migrate db-reset db-check db-status db-remove-fields db-add-messages help
 
 # Default goal
 .DEFAULT_GOAL := run
@@ -58,6 +58,18 @@ db-migrate:
 	go run ./cmd/db migrate
 	@echo ""
 
+# Remove priority and deadline fields from projects table
+db-remove-fields:
+	@echo "Removing priority and deadline fields from projects table..."
+	go run ./cmd/db exec remove_priority_deadline.sql
+	@echo ""
+
+# Add messages table for conversation context
+db-add-messages:
+	@echo "Adding messages table for conversation context..."
+	go run ./cmd/db exec add_messages_table.sql
+	@echo ""
+
 # Reset database (WARNING: This will delete all data!)
 db-reset:
 	@echo "Resetting database..."
@@ -92,11 +104,13 @@ help:
 	@echo "  make clean     - Clean build artifacts"
 	@echo ""
 	@echo "🗄️  Database:"
-	@echo "  make db-init     - Initialize database schema (for new installations)"
-	@echo "  make db-migrate  - Run database migration (for existing databases)"
-	@echo "  make db-reset    - Reset database (⚠️  WARNING: deletes all data!)"
-	@echo "  make db-check    - Check database connection"
-	@echo "  make db-status   - Show database status and record counts"
+	@echo "  make db-init         - Initialize database schema (for new installations)"
+	@echo "  make db-migrate      - Run database migration (for existing databases)"
+	@echo "  make db-remove-fields - Remove priority and deadline fields from projects table"
+	@echo "  make db-add-messages - Add messages table for conversation context"
+	@echo "  make db-reset        - Reset database (⚠️  WARNING: deletes all data!)"
+	@echo "  make db-check        - Check database connection"
+	@echo "  make db-status       - Show database status and record counts"
 	@echo ""
 	@echo "🔧 Development:"
 	@echo "  make db-connect  - Open MySQL tunnel to production server"

@@ -28,6 +28,13 @@ func main() {
 		checkConnection()
 	case "status":
 		showStatus()
+	case "exec":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: exec command requires a SQL file name")
+			fmt.Println("Usage: go run ./cmd/db exec <filename.sql>")
+			os.Exit(1)
+		}
+		execSQLFile(os.Args[2])
 	case "help":
 		printUsage()
 	default:
@@ -48,6 +55,7 @@ func printUsage() {
 	fmt.Println("  reset    - Reset database (WARNING: deletes all data!)")
 	fmt.Println("  check    - Check database connection")
 	fmt.Println("  status   - Show database status and record counts")
+	fmt.Println("  exec     - Execute a specific SQL file")
 	fmt.Println("  help     - Show this help message")
 }
 
@@ -126,7 +134,7 @@ func showStatus() {
 	defer db.Close()
 
 	// Get table counts
-	tables := []string{"users", "projects"}
+	tables := []string{"users", "projects", "project_users", "messages", "tasks"}
 	for _, table := range tables {
 		var count int
 		err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
@@ -169,4 +177,15 @@ func executeSQLFile(config *internal.Config, filename string) error {
 	}
 
 	return nil
+}
+
+func execSQLFile(filename string) {
+	fmt.Println("Executing SQL file:", filename)
+
+	config := internal.LoadConfigForDB()
+	if err := executeSQLFile(config, filename); err != nil {
+		log.Fatalf("Failed to execute SQL file: %v", err)
+	}
+
+	fmt.Println("✅ SQL file executed successfully")
 }

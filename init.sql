@@ -1,7 +1,9 @@
--- Create database if not exists
+-- Complete database schema initialization
+-- Creates database and all tables with improved project management structure
+
+-- Create database
 CREATE DATABASE IF NOT EXISTS teamwork;
 
--- Use the database
 USE teamwork;
 
 -- Create users table
@@ -15,10 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
     INDEX idx_tg_id (tg_id)
 );
 
--- Create projects table
-CREATE TABLE IF NOT EXISTS projects (
+-- Create projects table (without user_id - projects can have multiple users)
+CREATE TABLE projects (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
     status ENUM(
@@ -28,21 +29,41 @@ CREATE TABLE IF NOT EXISTS projects (
         'completed',
         'cancelled'
     ) DEFAULT 'planning',
-    priority ENUM(
-        'low',
-        'medium',
-        'high',
-        'urgent'
-    ) DEFAULT 'medium',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    deadline DATE NULL,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id),
     INDEX idx_status (status),
-    INDEX idx_priority (priority)
+    INDEX idx_created_at (created_at)
 );
 
--- Example inserts
--- INSERT INTO users (tg_id, tg_name, email, name) VALUES (12345678, 'username', 'user@example.com', 'User Name');
--- INSERT INTO projects (user_id, title, description, status, priority) VALUES (1, 'My First Project', 'Description of my project', 'active', 'high');
+-- Create project_users table for many-to-many relationship with roles
+CREATE TABLE project_users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    project_id INT NOT NULL,
+    user_id INT NOT NULL,
+    role ENUM(
+        'owner',
+        'admin',
+        'member',
+        'viewer'
+    ) DEFAULT 'member',
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    UNIQUE KEY unique_project_user (project_id, user_id),
+    INDEX idx_project_id (project_id),
+    INDEX idx_user_id (user_id),
+    INDEX idx_role (role)
+);
+
+-- Create messages table for conversation context
+CREATE TABLE IF NOT EXISTS messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    chat_id BIGINT NOT NULL,
+    role ENUM('user', 'assistant') NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_user_chat_created (user_id, chat_id, created_at),
+    INDEX idx_chat_created (chat_id, created_at),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);

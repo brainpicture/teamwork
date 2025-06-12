@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 
 	"github.com/sashabaranov/go-openai"
@@ -11,8 +12,11 @@ import (
 // AIProvider interface for different AI providers
 type AIProvider interface {
 	GenerateResponse(ctx context.Context, prompt string) (string, error)
+	GenerateResponseWithContext(ctx context.Context, prompt string, history []*Message) (string, error)
 	GenerateWelcomeMessage(ctx context.Context, userName, status, timestamp string) (string, error)
 	GenerateErrorMessage(ctx context.Context, errorContext string) (string, error)
+	TranscribeAudio(ctx context.Context, audioData io.Reader, filename string) (string, error)
+	GenerateResponseWithContextAndProject(ctx context.Context, prompt string, history []*Message, currentProject *Project) (string, error)
 }
 
 // OpenAIProvider implementation for OpenAI ChatGPT
@@ -30,8 +34,28 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	}
 }
 
+// TranscribeAudio transcribes audio using OpenAI Whisper API
+func (p *OpenAIProvider) TranscribeAudio(ctx context.Context, audioData io.Reader, filename string) (string, error) {
+	req := openai.AudioRequest{
+		Model:    openai.Whisper1,
+		Reader:   audioData,
+		FilePath: filename, // Add filename so OpenAI can determine format
+	}
+
+	resp, err := p.client.CreateTranscription(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("Whisper API error: %v", err)
+	}
+
+	log.Printf("Audio transcribed successfully: %d characters", len(resp.Text))
+	return resp.Text, nil
+}
+
 // GenerateResponse generates a response using OpenAI ChatGPT
 func (p *OpenAIProvider) GenerateResponse(ctx context.Context, prompt string) (string, error) {
+	// Get available functions
+	openAIFunctions := GetGPTFunctions()
+
 	resp, err := p.client.CreateChatCompletion(
 		ctx,
 		openai.ChatCompletionRequest{
@@ -39,13 +63,14 @@ func (p *OpenAIProvider) GenerateResponse(ctx context.Context, prompt string) (s
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: SystemPrompt,
+					Content: GetSystemPrompt(),
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
 					Content: prompt,
 				},
 			},
+			Functions:   openAIFunctions,
 			MaxTokens:   500,
 			Temperature: 0.7,
 		},
@@ -59,7 +84,14 @@ func (p *OpenAIProvider) GenerateResponse(ctx context.Context, prompt string) (s
 		return "", fmt.Errorf("no response from ChatGPT")
 	}
 
-	response := resp.Choices[0].Message.Content
+	choice := resp.Choices[0]
+
+	// Check if GPT wants to call a function
+	if choice.Message.FunctionCall != nil {
+		return "", fmt.Errorf("function_call:%s:%s", choice.Message.FunctionCall.Name, choice.Message.FunctionCall.Arguments)
+	}
+
+	response := choice.Message.Content
 	log.Printf("AI Response generated: %d characters", len(response))
 	return response, nil
 }
@@ -74,6 +106,140 @@ func (p *OpenAIProvider) GenerateWelcomeMessage(ctx context.Context, userName, s
 func (p *OpenAIProvider) GenerateErrorMessage(ctx context.Context, errorContext string) (string, error) {
 	prompt := fmt.Sprintf(ErrorPromptTemplate, errorContext)
 	return p.GenerateResponse(ctx, prompt)
+}
+
+// GenerateResponseWithContext generates a response using OpenAI ChatGPT with conversation history
+func (p *OpenAIProvider) GenerateResponseWithContext(ctx context.Context, prompt string, history []*Message) (string, error) {
+	// Get available functions
+	openAIFunctions := GetGPTFunctions()
+
+	// Build message history
+	messages := []openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: GetSystemPrompt(),
+		},
+	}
+
+	// Add conversation history
+	for _, msg := range history {
+		role := openai.ChatMessageRoleUser
+		if msg.Role == "assistant" {
+			role = openai.ChatMessageRoleAssistant
+		}
+
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    role,
+			Content: msg.Content,
+		})
+	}
+
+	// Add current user message
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: prompt,
+	})
+
+	resp, err := p.client.CreateChatCompletion(
+		ctx,
+		openai.ChatCompletionRequest{
+			Model:       p.model,
+			Messages:    messages,
+			Functions:   openAIFunctions,
+			MaxTokens:   500,
+			Temperature: 0.7,
+		},
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("ChatGPT API error: %v", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from ChatGPT")
+	}
+
+	choice := resp.Choices[0]
+
+	// Check if GPT wants to call a function
+	if choice.Message.FunctionCall != nil {
+		return "", fmt.Errorf("function_call:%s:%s", choice.Message.FunctionCall.Name, choice.Message.FunctionCall.Arguments)
+	}
+
+	response := choice.Message.Content
+	log.Printf("AI Response with context generated: %d characters, history: %d messages", len(response), len(history))
+	return response, nil
+}
+
+// GenerateResponseWithContextAndProject generates a response using OpenAI ChatGPT with conversation history and current project context
+func (p *OpenAIProvider) GenerateResponseWithContextAndProject(ctx context.Context, prompt string, history []*Message, currentProject *Project) (string, error) {
+	// Get available functions
+	openAIFunctions := GetGPTFunctions()
+
+	// Build enhanced system prompt with current project info
+	systemPrompt := GetSystemPrompt()
+	if currentProject != nil {
+		projectInfo := fmt.Sprintf("\n\nТЕКУЩИЙ ПРОЕКТ ПОЛЬЗОВАТЕЛЯ:\n- ID: %d\n- Название: %s\n- Описание: %s\n- Статус: %s\n- Роль пользователя: %s\n\nПри создании задач используй этот проект по умолчанию, если пользователь не указал другой проект явно.",
+			currentProject.ID, currentProject.Title, currentProject.Description, currentProject.Status, currentProject.UserRole)
+		systemPrompt += projectInfo
+	}
+
+	// Build message history
+	messages := []openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemPrompt,
+		},
+	}
+
+	// Add conversation history
+	for _, msg := range history {
+		role := openai.ChatMessageRoleUser
+		if msg.Role == "assistant" {
+			role = openai.ChatMessageRoleAssistant
+		}
+
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    role,
+			Content: msg.Content,
+		})
+	}
+
+	// Add current user message
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: prompt,
+	})
+
+	resp, err := p.client.CreateChatCompletion(
+		ctx,
+		openai.ChatCompletionRequest{
+			Model:       p.model,
+			Messages:    messages,
+			Functions:   openAIFunctions,
+			MaxTokens:   500,
+			Temperature: 0.7,
+		},
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("ChatGPT API error: %v", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from ChatGPT")
+	}
+
+	choice := resp.Choices[0]
+
+	// Check if GPT wants to call a function
+	if choice.Message.FunctionCall != nil {
+		return "", fmt.Errorf("function_call:%s:%s", choice.Message.FunctionCall.Name, choice.Message.FunctionCall.Arguments)
+	}
+
+	response := choice.Message.Content
+	log.Printf("AI Response with project context generated: %d characters, project: %s", len(response), currentProject.Title)
+	return response, nil
 }
 
 // AIService manages AI providers and provides high-level AI functionality
@@ -93,6 +259,15 @@ func NewAIService(provider AIProvider, enabled bool) *AIService {
 // IsEnabled returns whether AI service is enabled
 func (s *AIService) IsEnabled() bool {
 	return s.enabled && s.provider != nil
+}
+
+// TranscribeAudio transcribes audio if enabled, otherwise returns error
+func (s *AIService) TranscribeAudio(ctx context.Context, audioData io.Reader, filename string) (string, error) {
+	if !s.IsEnabled() {
+		return "", fmt.Errorf("AI service is disabled")
+	}
+
+	return s.provider.TranscribeAudio(ctx, audioData, filename)
 }
 
 // GenerateResponse generates an AI response if enabled, otherwise returns fallback
@@ -124,4 +299,108 @@ func (s *AIService) GenerateWelcomeMessage(ctx context.Context, userName, status
 	}
 
 	return response
+}
+
+// GenerateResponseWithContext generates an AI response with conversation history if enabled, otherwise returns fallback
+func (s *AIService) GenerateResponseWithContext(ctx context.Context, prompt string, history []*Message, fallback string) (string, error) {
+	if !s.IsEnabled() {
+		return fallback, nil
+	}
+
+	response, err := s.provider.GenerateResponseWithContext(ctx, prompt, history)
+	if err != nil {
+		return "", err
+	}
+
+	return response, nil
+}
+
+// GenerateResponseWithContextAndProject generates a response with conversation history and current project context
+func (s *AIService) GenerateResponseWithContextAndProject(ctx context.Context, prompt string, history []*Message, currentProject *Project, fallback string) (string, error) {
+	if !s.IsEnabled() {
+		return fallback, nil
+	}
+
+	// Check if provider supports project context
+	if provider, ok := s.provider.(*OpenAIProvider); ok {
+		response, err := provider.GenerateResponseWithContextAndProject(ctx, prompt, history, currentProject)
+		if err != nil {
+			return "", err
+		}
+		return response, nil
+	}
+
+	// Fallback to regular context if provider doesn't support project context
+	response, err := s.provider.GenerateResponseWithContext(ctx, prompt, history)
+	if err != nil {
+		return "", err
+	}
+
+	return response, nil
+}
+
+// FormatDataResponse uses GPT to format raw data response
+func (s *AIService) FormatDataResponse(ctx context.Context, userQuery string, functionType string, jsonData string) (string, error) {
+	if !s.enabled {
+		return fmt.Sprintf("Данные получены: %s", jsonData), nil
+	}
+
+	// Build special prompt for data formatting
+	prompt := fmt.Sprintf(`Пользователь запросил: "%s"
+
+Функция %s вернула следующие данные в JSON:
+%s
+
+Твоя задача:
+1. Проанализировать данные
+2. Создать красивый, информативный ответ для пользователя
+3. ОБЯЗАТЕЛЬНО используй send_message_with_buttons если это уместно:
+   - Если нет данных (пустой список) - добавь полезные кнопки для создания/навигации
+   - Если есть данные - добавь кнопки для дальнейших действий
+   - Кнопки должны содержать конкретные действия, которые пользователь может выполнить
+
+Отформатируй ответ с эмодзи, сделай его удобным для чтения.
+Если список пуст, обязательно предложи альтернативные действия через кнопки.`, userQuery, functionType, jsonData)
+
+	// Get available functions
+	openAIFunctions := GetGPTFunctions()
+
+	resp, err := s.provider.(*OpenAIProvider).client.CreateChatCompletion(
+		ctx,
+		openai.ChatCompletionRequest{
+			Model: s.provider.(*OpenAIProvider).model,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: GetSystemPrompt(),
+				},
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: prompt,
+				},
+			},
+			Functions:   openAIFunctions,
+			MaxTokens:   500,
+			Temperature: 0.7,
+		},
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("ChatGPT API error: %v", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from ChatGPT")
+	}
+
+	choice := resp.Choices[0]
+
+	// Check if GPT wants to call a function
+	if choice.Message.FunctionCall != nil {
+		return fmt.Sprintf("function_call:%s:%s", choice.Message.FunctionCall.Name, choice.Message.FunctionCall.Arguments), nil
+	}
+
+	response := choice.Message.Content
+	log.Printf("AI Data formatting response generated: %d characters", len(response))
+	return response, nil
 }
