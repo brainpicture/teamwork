@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -64,8 +63,7 @@ func HandleUserMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, updat
 	user, isNewUser, err := db.GetOrCreateUser(tgID, tgName)
 	if err != nil {
 		log.Printf("Error handling user in database: %v", err)
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Sorry, an internal error occurred.")
-		msg.ParseMode = tgbotapi.ModeHTML // Enable HTML formatting
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Извините, произошла внутренняя ошибка.")
 		if _, err := bot.Send(msg); err != nil {
 			log.Printf("Failed to send error message: %v", err)
 		}
@@ -76,15 +74,15 @@ func HandleUserMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, updat
 		log.Printf("Warning: User ID is 0, database operation may have failed.")
 	} else {
 		if isNewUser {
-			log.Printf("NEW USER created in database: %s (DB_ID: %d, TG_ID: %d)", user.TgName, user.ID, user.TgID)
+			log.Printf("NEW USER created: %s (DB_ID: %d, TG_ID: %d)", user.TgName, user.ID, user.TgID)
 		} else {
-			log.Printf("Existing user found in database: %s (DB_ID: %d, TG_ID: %d)", user.TgName, user.ID, user.TgID)
+			log.Printf("Existing user found: %s (DB_ID: %d, TG_ID: %d)", user.TgName, user.ID, user.TgID)
 		}
 	}
 
 	// Handle voice/audio messages
 	if update.Message.Voice != nil || update.Message.Audio != nil {
-		log.Printf("[%s] (ID: %d) sent audio message", tgName, tgID)
+		log.Printf("[%s] sent audio message", tgName)
 		handleAudioMessage(bot, db, aiService, update, user)
 		return
 	}
@@ -94,20 +92,107 @@ func HandleUserMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, updat
 	log.Printf("Processing message: '%s', isNewUser: %t", messageText, isNewUser)
 
 	// Send welcome message for new users OR /start command
-	if isNewUser {
-		log.Printf("Sending welcome message to NEW USER: %s", user.TgName)
-		SendWelcomeMessageWithTyping(bot, db, aiService, update.Message.Chat.ID, user.TgName, user.ID, true)
+	if isNewUser || messageText == "/start" {
+		log.Printf("Sending welcome message to: %s", user.TgName)
+		SendWelcomeMessageWithTyping(bot, db, aiService, update.Message.Chat.ID, user.TgName, user.ID, isNewUser)
 		return
 	}
 
-	if messageText == "/start" {
-		log.Printf("Sending welcome message for /start command: %s", user.TgName)
-		SendWelcomeMessageWithTyping(bot, db, aiService, update.Message.Chat.ID, user.TgName, user.ID, false)
+	// Handle project management commands
+	if strings.HasPrefix(messageText, "/") {
+		handleCommand(bot, db, user, messageText, update.Message.Chat.ID)
 		return
 	}
 
-	// Process text message
+	// Process regular text message
 	processTextMessage(bot, db, aiService, update, user, messageText)
+}
+
+// handleCommand processes bot commands
+func handleCommand(bot *tgbotapi.BotAPI, db *DB, user *User, command string, chatID int64) {
+	switch command {
+	case "/projects":
+		handleProjectsCommand(bot, db, user, chatID)
+	case "/project_add":
+		handleProjectAddCommand(bot, db, user, chatID)
+	case "/help":
+		handleHelpCommand(bot, chatID)
+	default:
+		SendReply(bot, chatID, "Неизвестная команда. Используйте /help для списка доступных команд.")
+	}
+}
+
+// handleProjectsCommand shows user's projects
+func handleProjectsCommand(bot *tgbotapi.BotAPI, db *DB, user *User, chatID int64) {
+	projects, err := db.GetUserProjects(user.ID)
+	if err != nil {
+		log.Printf("Error getting projects: %v", err)
+		SendReply(bot, chatID, "Ошибка при получении списка проектов.")
+		return
+	}
+
+	if len(projects) == 0 {
+		SendMessageWithCreateProjectButton(bot, chatID, "📋 У вас пока нет проектов.\n\nВыберите тип проекта для быстрого создания или нажмите кнопку для создания собственного:")
+		return
+	}
+
+	// Build projects list
+	var message strings.Builder
+	message.WriteString("📋 Ваши проекты:\n\n")
+	
+	for i, project := range projects {
+		emoji := getProjectStatusEmoji(project.Status)
+		message.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, emoji, project.Title))
+		if project.Description != "" {
+			message.WriteString(fmt.Sprintf("   📝 %s\n", project.Description))
+		}
+		message.WriteString(fmt.Sprintf("   📊 Статус: %s\n\n", project.Status))
+	}
+
+	SendReply(bot, chatID, message.String())
+}
+
+// getProjectStatusEmoji returns emoji for project status
+func getProjectStatusEmoji(status ProjectStatus) string {
+	switch status {
+	case StatusPlanning:
+		return "📝"
+	case StatusActive:
+		return "🚀"
+	case StatusPaused:
+		return "⏸️"
+	case StatusCompleted:
+		return "✅"
+	case StatusCancelled:
+		return "❌"
+	default:
+		return "❓"
+	}
+}
+
+// handleProjectAddCommand handles project creation
+func handleProjectAddCommand(bot *tgbotapi.BotAPI, db *DB, user *User, chatID int64) {
+	SendReply(bot, chatID, "📋 Создание нового проекта\n\nОтправьте название проекта или используйте формат:\n\"Название проекта | Описание проекта\"")
+	
+	// For simplicity, we'll just show instructions
+	// In a more complex implementation, you could track user state
+}
+
+// handleHelpCommand shows help information
+func handleHelpCommand(bot *tgbotapi.BotAPI, chatID int64) {
+	helpText := `🤖 Доступные команды:
+
+📋 Проекты:
+/projects - показать ваши проекты
+/project_add - создать новый проект
+
+ℹ️ Справка:
+/help - показать это сообщение
+
+💬 Также вы можете просто написать мне любое сообщение, и я отвечу!
+🎤 Поддерживаются голосовые сообщения (будут преобразованы в текст).`
+
+	SendReply(bot, chatID, helpText)
 }
 
 // handleAudioMessage processes voice and audio messages
@@ -119,7 +204,7 @@ func handleAudioMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, upda
 	}
 
 	// Create context with timeout for audio processing
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Longer timeout for audio
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	// Start typing indicator
@@ -131,13 +216,13 @@ func handleAudioMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, upda
 	// Get file info based on message type
 	if update.Message.Voice != nil {
 		fileID = update.Message.Voice.FileID
-		fileName = "voice.ogg" // Telegram voice messages are in OGG format
+		fileName = "voice.ogg"
 		log.Printf("Processing voice message: duration=%ds", update.Message.Voice.Duration)
 	} else if update.Message.Audio != nil {
 		fileID = update.Message.Audio.FileID
 		fileName = update.Message.Audio.FileName
 		if fileName == "" {
-			fileName = "audio.mp3" // Default name if not provided
+			fileName = "audio.mp3"
 		}
 		log.Printf("Processing audio message: duration=%ds, filename=%s", update.Message.Audio.Duration, fileName)
 	}
@@ -185,15 +270,23 @@ func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID string) (io.Reader, error
 	return resp.Body, nil
 }
 
-// processTextMessage processes a text message (extracted from HandleUserMessage)
+// processTextMessage processes a text message
 func processTextMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, update tgbotapi.Update, user *User, messageText string) {
 	// Save user message to database
 	if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "user", messageText); err != nil {
 		log.Printf("Error saving user message: %v", err)
 	}
 
-	// Load recent conversation history (last 50 messages)
-	history, err := db.GetRecentMessages(update.Message.Chat.ID, 50)
+	// Check if message looks like project creation
+	if strings.Contains(strings.ToLower(messageText), "создай проект") || 
+	   strings.Contains(strings.ToLower(messageText), "создать проект") ||
+	   strings.Contains(strings.ToLower(messageText), "новый проект") {
+		handleProjectCreationMessage(bot, db, user, update.Message.Chat.ID, messageText)
+		return
+	}
+
+	// Load recent conversation history (last 20 messages)
+	history, err := db.GetRecentMessages(update.Message.Chat.ID, 20)
 	if err != nil {
 		log.Printf("Error loading conversation history: %v", err)
 		history = []*Message{} // Use empty history on error
@@ -210,221 +303,104 @@ func processTextMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, upda
 	currentProject, err := db.GetUserCurrentProject(user.ID)
 	if err != nil {
 		log.Printf("Error getting current project for user %d: %v", user.ID, err)
-		currentProject = nil // Continue without current project context
+		currentProject = nil
 	}
 
 	// Generate AI response with conversation context and current project
-	aiResponse, err := aiService.GenerateResponseWithContextAndProject(ctx, messageText, history, currentProject, "Привет! Я помощник команды разработчиков. Как дела? 👋")
+	fallbackMessage := "Привет! Я помощник команды разработчиков. Как дела? 👋"
+	aiResponse, err := aiService.GenerateResponseWithContextAndProject(ctx, messageText, history, currentProject, fallbackMessage)
 
-	// Handle AI service errors
 	if err != nil {
-		// Check if this is a function call
-		if strings.HasPrefix(err.Error(), "function_call:") {
-			aiResponse = err.Error() // Use the function call as response
-		} else {
-			// Real error - inform user and save error message
-			errorMsg := fmt.Sprintf("❌ Произошла ошибка при обработке запроса: %v", err)
-			log.Printf("AI generation error: %v", err)
-
-			// Save error response to database
-			if saveErr := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", errorMsg); saveErr != nil {
-				log.Printf("Error saving bot error response: %v", saveErr)
-			}
-
-			SendReply(bot, update.Message.Chat.ID, errorMsg)
-			return
-		}
+		log.Printf("AI generation error: %v", err)
+		aiResponse = fallbackMessage
 	}
 
-	// All AI responses are now treated as JavaScript code
-	log.Printf("🔄 EXECUTING JAVASCRIPT for user %d: %s", user.ID, aiResponse)
+	// Send response to user
+	SendReply(bot, update.Message.Chat.ID, aiResponse)
 
-	parameters := map[string]interface{}{
-		"code": aiResponse,
-	}
-
-	jsResult, err := executeJavaScriptDirect(db, user.ID, parameters)
-	if err != nil {
-		log.Printf("Error executing JavaScript: %v", err)
-
-		// Check if this looks like plain text instead of JavaScript
-		if !strings.Contains(aiResponse, "message(") && !strings.Contains(aiResponse, "teamwork.") &&
-			!strings.Contains(aiResponse, "let ") && !strings.Contains(aiResponse, "const ") &&
-			!strings.Contains(aiResponse, "var ") && !strings.Contains(aiResponse, "function") {
-
-			// This looks like plain text, give GPT a detailed hint
-			errorMsg := fmt.Sprintf(`🚨 СИСТЕМНАЯ ОШИБКА: Обнаружен обычный текст вместо JavaScript!
-
-❌ Ваш ответ: "%s"
-
-✅ Правильный формат:
-message("%s");
-
-🤖 НАПОМИНАНИЕ: Вы - JavaScript интерпретатор!
-Вы можете отвечать ТОЛЬКО кодом JavaScript!
-
-📋 Примеры правильных ответов:
-• message("Привет! 👋");
-• let projects = teamwork.listProjects();
-• message("У вас " + projects.length + " проектов");
-
-🔄 Попробуйте еще раз с JavaScript кодом!`, aiResponse, aiResponse)
-
-			SendReply(bot, update.Message.Chat.ID, errorMsg)
-		} else {
-			// This is a JavaScript syntax error, provide specific help
-			jsErrorMsg := fmt.Sprintf(`🚨 ОШИБКА JAVASCRIPT: %v
-
-❌ Ваш код:
-%s
-
-🔧 ЧАСТЫЕ ОШИБКИ И ИСПРАВЛЕНИЯ:
-
-1️⃣ Пропущен return в map():
-❌ projects.map(p => { title: p.title })
-✅ projects.map(p => ({ title: p.title }))
-✅ projects.map(p => { return { title: p.title }; })
-
-2️⃣ Неправильный синтаксис объекта:
-❌ { title: project.title, count: tasks.length }
-✅ let obj = { title: project.title, count: tasks.length };
-✅ return { title: project.title, count: tasks.length };
-
-3️⃣ Забыли точку с запятой:
-❌ let x = 5
-✅ let x = 5;
-
-🔄 Исправьте синтаксис и попробуйте снова!`, err, aiResponse)
-			SendReply(bot, update.Message.Chat.ID, jsErrorMsg)
-
-			// Save the error to context so GPT learns
-			systemError := fmt.Sprintf("КРИТИЧЕСКАЯ ОШИБКА JAVASCRIPT: GPT написал код с синтаксической ошибкой '%s'. ОБЯЗАТЕЛЬНО проверять синтаксис JavaScript! Частые ошибки: пропущен return в map(), неправильные объекты, забытые точки с запятой.", aiResponse)
-			if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "system", systemError); err != nil {
-				log.Printf("Error saving JavaScript error to history: %v", err)
-			}
-		}
-		return
-	}
-
-	// Parse JavaScript result
-	var resultObj map[string]interface{}
-	if json.Unmarshal([]byte(jsResult), &resultObj) == nil {
-		// Check if result contains pending operations (JSON with requiresConfirmation)
-		if requiresConfirmation, ok := resultObj["requiresConfirmation"].(bool); ok && requiresConfirmation {
-			// This is a pending operation, handle it normally
-			operationID := resultObj["operationID"].(string)
-			if pendingOp, exists := pendingOperations[operationID]; exists {
-				pendingOp.ChatID = update.Message.Chat.ID // Set correct chat ID
-				pendingOperations[operationID] = pendingOp
-
-				confirmationMsg := CreateConfirmationMessage(db, pendingOp)
-				if _, err := bot.Send(confirmationMsg); err != nil {
-					log.Printf("Error sending confirmation message: %v", err)
-					SendReply(bot, update.Message.Chat.ID, "Ошибка отправки подтверждения")
-				}
-				return
-			}
-		}
-
-		// Handle messages and output from JavaScript
-		messages, hasMessages := resultObj["messages"].([]interface{})
-		outputArray, hasOutput := resultObj["output"].([]interface{})
-
-		// Send messages to user if any
-		if hasMessages && len(messages) > 0 {
-			for _, msg := range messages {
-				if msgStr, ok := msg.(string); ok && msgStr != "" {
-					SendReply(bot, update.Message.Chat.ID, msgStr)
-					// Save each message to history
-					if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", msgStr); err != nil {
-						log.Printf("Error saving bot message: %v", err)
-					}
-				}
-			}
-		}
-
-		// If there's output data, pass it back to GPT for continuation
-		if hasOutput && len(outputArray) > 0 {
-			log.Printf("🔄 JavaScript returned %d output items, continuing GPT conversation", len(outputArray))
-
-			// Convert output array to strings and join for context message
-			var outputStrings []string
-			for _, item := range outputArray {
-				if itemStr, ok := item.(string); ok {
-					outputStrings = append(outputStrings, itemStr)
-				} else {
-					outputStrings = append(outputStrings, fmt.Sprintf("%v", item))
-				}
-			}
-			outputData := strings.Join(outputStrings, "\n")
-
-			// Add detailed output data to conversation context
-			outputMessage := fmt.Sprintf("Результат выполнения JavaScript кода:\n\nВызванный код вернул следующие данные через output():\n%s\n\nПроанализируй эти данные и продолжи диалог с пользователем.", outputData)
-			if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "system", outputMessage); err != nil {
-				log.Printf("Error saving JavaScript output to history: %v", err)
-			}
-
-			// Generate new AI response based on the output
-			messages, err := db.GetRecentMessages(update.Message.Chat.ID, 10)
-			if err != nil {
-				log.Printf("Error getting recent messages for continuation: %v", err)
-				return
-			}
-
-			// Send typing indicator while generating response
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			SendTypingWithContext(bot, update.Message.Chat.ID, ctx)
-
-			// Generate AI response with the new context - GPT should generate NEW JavaScript code
-			continueResponse, err := aiService.GenerateResponseWithContext(ctx, "Проанализируй данные из output() и сгенерируй НОВЫЙ JavaScript код для обработки этих данных", messages, "")
-			if err != nil {
-				log.Printf("Error generating continuation response: %v", err)
-				return
-			}
-
-			// Execute the NEW JavaScript code generated by GPT with prev_output array
-			log.Printf("🔄 EXECUTING NEW JS CODE generated by GPT for user %d", user.ID)
-			recParams := map[string]interface{}{
-				"code":        continueResponse,
-				"prev_output": outputArray, // Передаем массив output данных
-			}
-			recResult, err := executeJavaScriptDirect(db, user.ID, recParams)
-			if err == nil {
-				// Handle recursive result
-				var recObj map[string]interface{}
-				if json.Unmarshal([]byte(recResult), &recObj) == nil {
-					if recMessages, ok := recObj["messages"].([]interface{}); ok {
-						for _, msg := range recMessages {
-							if msgStr, ok := msg.(string); ok && msgStr != "" {
-								SendReply(bot, update.Message.Chat.ID, msgStr)
-								if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", msgStr); err != nil {
-									log.Printf("Error saving recursive bot message: %v", err)
-								}
-							}
-						}
-					}
-				}
-			}
-			return
-		}
-
-		// If only messages were sent (no output), we're done
-		if hasMessages {
-			return
-		}
-	}
-
-	// Fallback: if no messages were sent, this might be an error or unexpected result
-	if jsResult != "" {
-		log.Printf("⚠️ JavaScript executed but no messages sent to user. Result: %s", jsResult)
-		SendReply(bot, update.Message.Chat.ID, "Код выполнен, но результат не был отправлен через message()")
+	// Save AI response to database
+	if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", aiResponse); err != nil {
+		log.Printf("Error saving bot response: %v", err)
 	}
 
 	// Cleanup old messages (keep last 50)
 	if err := db.CleanupOldMessages(update.Message.Chat.ID, 50); err != nil {
 		log.Printf("Error cleaning up old messages: %v", err)
 	}
+}
+
+// handleProjectCreationMessage handles project creation from natural language
+func handleProjectCreationMessage(bot *tgbotapi.BotAPI, db *DB, user *User, chatID int64, messageText string) {
+	// Simple parsing - look for project name after "проект"
+	var projectName, projectDescription string
+	
+	// Try to extract project name and description
+	text := strings.ToLower(messageText)
+	
+	// Look for patterns like "создай проект [название]" or "создать проект [название] с описанием [описание]"
+	if strings.Contains(text, "создай проект") {
+		parts := strings.Split(messageText, "создай проект")
+		if len(parts) > 1 {
+			remaining := strings.TrimSpace(parts[1])
+			if strings.Contains(remaining, " с описанием ") {
+				projectParts := strings.Split(remaining, " с описанием ")
+				projectName = strings.TrimSpace(projectParts[0])
+				if len(projectParts) > 1 {
+					projectDescription = strings.TrimSpace(projectParts[1])
+				}
+			} else {
+				projectName = remaining
+			}
+		}
+	} else if strings.Contains(text, "создать проект") {
+		parts := strings.Split(messageText, "создать проект")
+		if len(parts) > 1 {
+			remaining := strings.TrimSpace(parts[1])
+			if strings.Contains(remaining, " с описанием ") {
+				projectParts := strings.Split(remaining, " с описанием ")
+				projectName = strings.TrimSpace(projectParts[0])
+				if len(projectParts) > 1 {
+					projectDescription = strings.TrimSpace(projectParts[1])
+				}
+			} else {
+				projectName = remaining
+			}
+		}
+	}
+
+	// Clean up project name
+	projectName = strings.Trim(projectName, "\"'")
+	projectDescription = strings.Trim(projectDescription, "\"'")
+
+	if projectName == "" {
+		SendReply(bot, chatID, "Не могу определить название проекта. Попробуйте:\n\"Создай проект Мой сайт\" или \"Создать проект Мой сайт с описанием Простой сайт для компании\"")
+		return
+	}
+
+	// Create project
+	_, err := db.CreateProject(user.ID, projectName, projectDescription)
+	if err != nil {
+		log.Printf("Error creating project: %v", err)
+		SendReply(bot, chatID, "❌ Ошибка при создании проекта. Попробуйте позже.")
+		return
+	}
+
+	// Success message
+	var successMsg string
+	if projectDescription != "" {
+		successMsg = fmt.Sprintf("✅ Проект '%s' успешно создан!\n📝 Описание: %s\n\nТеперь вы можете управлять проектом с помощью команд или просто пишите мне.", projectName, projectDescription)
+	} else {
+		successMsg = fmt.Sprintf("✅ Проект '%s' успешно создан!\n\nТеперь вы можете управлять проектом с помощью команд или просто пишите мне.", projectName)
+	}
+
+	SendReply(bot, chatID, successMsg)
+
+	// Save success message to history
+	if err := db.SaveMessage(user.ID, chatID, "assistant", successMsg); err != nil {
+		log.Printf("Error saving project creation message: %v", err)
+	}
+
+	log.Printf("User %s created project '%s'", user.TgName, projectName)
 }
 
 // SendWelcomeMessageWithTyping sends a welcome message with typing indicator
@@ -443,7 +419,6 @@ func SendWelcomeMessageWithTyping(bot *tgbotapi.BotAPI, db *DB, aiService *AISer
 	var welcomeText string
 
 	if isNewUser {
-		// Generate AI welcome message for new users
 		status := "новый пользователь"
 		timestamp := time.Now().Format("15:04, 2 January 2006")
 
@@ -453,15 +428,13 @@ func SendWelcomeMessageWithTyping(bot *tgbotapi.BotAPI, db *DB, aiService *AISer
 				userName,
 				status,
 				timestamp,
-				"🎉 Добро пожаловать, "+userName+"!\n\nЭто ваш первый раз здесь. Рады видеть вас!\nЯ готов помочь вам с задачами команды.\n\nИспользуйте команды для взаимодействия со мной.",
+				fmt.Sprintf("🎉 Добро пожаловать, %s!\n\nЭто ваш первый раз здесь. Рады видеть вас!\nЯ готов помочь вам с управлением проектами.\n\nИспользуйте /help для списка команд.", userName),
 			)
 		} else {
-			// Suggest creating first project for new users with no projects
-			welcomeText = fmt.Sprintf("🎉 Добро пожаловать, %s!\n\nРады видеть вас в первый раз! Я помощник для управления проектами команды.\n\n🚀 Давайте создадим ваш первый проект! Выберите один из популярных вариантов ниже или введите свое название:\n\n💡 Пример: \"Создай проект Интернет-магазин\"", userName)
+			welcomeText = fmt.Sprintf("🎉 Добро пожаловать, %s!\n\nРады видеть вас в первый раз! Я помощник для управления проектами команды.\n\n🚀 Давайте создадим ваш первый проект! Выберите один из популярных вариантов ниже или просто скажите: \"Создай проект [название]\"", userName)
 		}
-		log.Printf("Sending NEW USER welcome message to %s (hasProjects: %t)", userName, hasProjects)
+		log.Printf("Sending NEW USER welcome message to %s", userName)
 	} else {
-		// Generate AI welcome message for /start command
 		status := "возвращающийся пользователь"
 		timestamp := time.Now().Format("15:04, 2 January 2006")
 
@@ -471,13 +444,12 @@ func SendWelcomeMessageWithTyping(bot *tgbotapi.BotAPI, db *DB, aiService *AISer
 				userName,
 				status,
 				timestamp,
-				"👋 Привет снова, "+userName+"!\n\nРад видеть вас! Чем могу помочь?\n\nИспользуйте команды для взаимодействия со мной.",
+				fmt.Sprintf("👋 Привет снова, %s!\n\nРад видеть вас! Чем могу помочь?\n\nИспользуйте /help для списка команд.", userName),
 			)
 		} else {
-			// Suggest creating first project for returning users with no projects
-			welcomeText = fmt.Sprintf("👋 Привет снова, %s!\n\nЯ заметил, что у вас пока нет проектов. Давайте исправим это!\n\n🚀 Выберите один из популярных типов проектов ниже или создайте свой:\n\n💡 Просто скажите: \"Создай проект [ваше название]\"", userName)
+			welcomeText = fmt.Sprintf("👋 Привет снова, %s!\n\nЯ заметил, что у вас пока нет проектов. Давайте исправим это!\n\n🚀 Выберите один из популярных типов проектов ниже или просто скажите: \"Создай проект [название]\"", userName)
 		}
-		log.Printf("Sending /start welcome message to %s (hasProjects: %t)", userName, hasProjects)
+		log.Printf("Sending /start welcome message to %s", userName)
 	}
 
 	// Send message with create project button if no projects exist
@@ -485,20 +457,13 @@ func SendWelcomeMessageWithTyping(bot *tgbotapi.BotAPI, db *DB, aiService *AISer
 		SendMessageWithCreateProjectButton(bot, chatID, welcomeText)
 	} else {
 		// Send regular message if user has projects
-		msg := tgbotapi.NewMessage(chatID, welcomeText)
-		msg.ParseMode = tgbotapi.ModeHTML // Enable HTML formatting
-		if _, err := bot.Send(msg); err != nil {
-			log.Printf("Failed to send welcome message: %v", err)
-		} else {
-			log.Printf("Welcome message sent successfully to %s", userName)
-		}
+		SendReply(bot, chatID, welcomeText)
 	}
 }
 
 // SendReply sends a reply message to the user
 func SendReply(bot *tgbotapi.BotAPI, chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = tgbotapi.ModeHTML // Enable HTML formatting
 	if _, err := bot.Send(msg); err != nil {
 		log.Printf("Failed to send message: %v", err)
 	}
