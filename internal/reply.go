@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/sashabaranov/go-openai"
 )
 
 // SendTypingAction sends "typing..." indicator to the chat
@@ -236,189 +237,125 @@ func processTextMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, upda
 		}
 	}
 
-	// All AI responses are now treated as JavaScript code
-	log.Printf("🔄 EXECUTING JAVASCRIPT for user %d: %s", user.ID, aiResponse)
-
-	parameters := map[string]interface{}{
-		"code": aiResponse,
-	}
-
-	jsResult, err := executeJavaScriptDirect(db, user.ID, parameters)
-	if err != nil {
-		log.Printf("Error executing JavaScript: %v", err)
-
-		// Check if this looks like plain text instead of JavaScript
-		if !strings.Contains(aiResponse, "message(") && !strings.Contains(aiResponse, "teamwork.") &&
-			!strings.Contains(aiResponse, "let ") && !strings.Contains(aiResponse, "const ") &&
-			!strings.Contains(aiResponse, "var ") && !strings.Contains(aiResponse, "function") {
-
-			// This looks like plain text, give GPT a detailed hint
-			errorMsg := fmt.Sprintf(`🚨 СИСТЕМНАЯ ОШИБКА: Обнаружен обычный текст вместо JavaScript!
-
-❌ Ваш ответ: "%s"
-
-✅ Правильный формат:
-message("%s");
-
-🤖 НАПОМИНАНИЕ: Вы - JavaScript интерпретатор!
-Вы можете отвечать ТОЛЬКО кодом JavaScript!
-
-📋 Примеры правильных ответов:
-• message("Привет! 👋");
-• let projects = teamwork.listProjects();
-• message("У вас " + projects.length + " проектов");
-
-🔄 Попробуйте еще раз с JavaScript кодом!`, aiResponse, aiResponse)
-
-			SendReply(bot, update.Message.Chat.ID, errorMsg)
-		} else {
-			// This is a JavaScript syntax error, provide specific help
-			jsErrorMsg := fmt.Sprintf(`🚨 ОШИБКА JAVASCRIPT: %v
-
-❌ Ваш код:
-%s
-
-🔧 ЧАСТЫЕ ОШИБКИ И ИСПРАВЛЕНИЯ:
-
-1️⃣ Пропущен return в map():
-❌ projects.map(p => { title: p.title })
-✅ projects.map(p => ({ title: p.title }))
-✅ projects.map(p => { return { title: p.title }; })
-
-2️⃣ Неправильный синтаксис объекта:
-❌ { title: project.title, count: tasks.length }
-✅ let obj = { title: project.title, count: tasks.length };
-✅ return { title: project.title, count: tasks.length };
-
-3️⃣ Забыли точку с запятой:
-❌ let x = 5
-✅ let x = 5;
-
-🔄 Исправьте синтаксис и попробуйте снова!`, err, aiResponse)
-			SendReply(bot, update.Message.Chat.ID, jsErrorMsg)
-
-			// Save the error to context so GPT learns
-			systemError := fmt.Sprintf("КРИТИЧЕСКАЯ ОШИБКА JAVASCRIPT: GPT написал код с синтаксической ошибкой '%s'. ОБЯЗАТЕЛЬНО проверять синтаксис JavaScript! Частые ошибки: пропущен return в map(), неправильные объекты, забытые точки с запятой.", aiResponse)
-			if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "system", systemError); err != nil {
-				log.Printf("Error saving JavaScript error to history: %v", err)
+	// Handle regular text response or function call
+	if strings.HasPrefix(aiResponse, "function_call:") {
+		// This is a function call, process it
+		log.Printf("🔄 PROCESSING FUNCTION CALL for user %d: %s", user.ID, aiResponse)
+		
+		// Parse function call format: "function_call:functionName:arguments"
+		parts := strings.SplitN(aiResponse, ":", 3)
+		if len(parts) >= 3 {
+			functionName := parts[1]
+			arguments := parts[2]
+			
+			// Create a fake function call for processing
+			functionCall := &openai.FunctionCall{
+				Name:      functionName,
+				Arguments: arguments,
 			}
-		}
-		return
-	}
-
-	// Parse JavaScript result
-	var resultObj map[string]interface{}
-	if json.Unmarshal([]byte(jsResult), &resultObj) == nil {
-		// Check if result contains pending operations (JSON with requiresConfirmation)
-		if requiresConfirmation, ok := resultObj["requiresConfirmation"].(bool); ok && requiresConfirmation {
-			// This is a pending operation, handle it normally
-			operationID := resultObj["operationID"].(string)
-			if pendingOp, exists := pendingOperations[operationID]; exists {
-				pendingOp.ChatID = update.Message.Chat.ID // Set correct chat ID
-				pendingOperations[operationID] = pendingOp
-
+			
+			// Process the function call
+			pendingOp, err := ProcessGPTFunctionCall(user.ID, update.Message.Chat.ID, functionCall)
+			if err != nil {
+				if strings.Contains(err.Error(), "_direct") {
+					// This is a direct function call (like list_projects, list_tasks)
+					functionType := strings.TrimSuffix(err.Error(), "_direct")
+					log.Printf("📋 DIRECT FUNCTION CALL: %s for user %d", functionType, user.ID)
+					
+					// Parse function arguments
+					var params map[string]interface{}
+					if json.Unmarshal([]byte(arguments), &params) != nil {
+						params = make(map[string]interface{})
+					}
+					
+					// Execute direct function
+					var result string
+					var directErr error
+					switch functionType {
+					case "list_projects":
+						result, directErr = executeListProjects(db, user.ID, params)
+					case "list_tasks":
+						result, directErr = executeListTasks(db, user.ID, params)
+					case "get_current_project":
+						result, directErr = executeGetCurrentProject(db, user.ID, params)
+					default:
+						directErr = fmt.Errorf("неизвестная функция: %s", functionType)
+					}
+					
+					if directErr != nil {
+						log.Printf("Error executing direct function %s: %v", functionType, directErr)
+						SendReply(bot, update.Message.Chat.ID, fmt.Sprintf("❌ Ошибка выполнения функции %s: %v", functionType, directErr))
+					} else {
+						// Format the response using AI
+						formattedResponse, formatErr := aiService.FormatDataResponse(ctx, messageText, functionType, result)
+						if formatErr != nil {
+							log.Printf("Error formatting response: %v", formatErr)
+							SendReply(bot, update.Message.Chat.ID, result) // Send raw result as fallback
+						} else {
+							// Check if formatted response is a function call
+							if strings.HasPrefix(formattedResponse, "function_call:") {
+								// Process the function call from formatting
+								formatParts := strings.SplitN(formattedResponse, ":", 3)
+								if len(formatParts) >= 3 {
+									formatFunctionName := formatParts[1]
+									formatArguments := formatParts[2]
+									
+									if formatFunctionName == "send_message_with_buttons" {
+										// Parse button parameters
+										var buttonParams map[string]interface{}
+										if json.Unmarshal([]byte(formatArguments), &buttonParams) == nil {
+											if message, ok := buttonParams["message"].(string); ok {
+												if buttons, ok := buttonParams["buttons"].([]interface{}); ok {
+													if err := SendMessageWithCustomButtons(bot, update.Message.Chat.ID, message, buttons); err != nil {
+														log.Printf("Error sending message with buttons: %v", err)
+														SendReply(bot, update.Message.Chat.ID, message) // Send without buttons as fallback
+													}
+												}
+											}
+										}
+									} else {
+										SendReply(bot, update.Message.Chat.ID, formattedResponse)
+									}
+								}
+							} else {
+								SendReply(bot, update.Message.Chat.ID, formattedResponse)
+							}
+						}
+						
+						// Save response to conversation history
+						if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", result); err != nil {
+							log.Printf("Error saving function result to history: %v", err)
+						}
+					}
+				} else {
+					log.Printf("Error processing function call: %v", err)
+					SendReply(bot, update.Message.Chat.ID, fmt.Sprintf("❌ Ошибка обработки функции: %v", err))
+				}
+			} else {
+				// This requires confirmation, send confirmation message
+				log.Printf("🔄 FUNCTION CALL requires confirmation for user %d", user.ID)
+				pendingOp.ChatID = update.Message.Chat.ID
+				pendingOperations[pendingOp.ID] = pendingOp
+				
 				confirmationMsg := CreateConfirmationMessage(db, pendingOp)
 				if _, err := bot.Send(confirmationMsg); err != nil {
 					log.Printf("Error sending confirmation message: %v", err)
 					SendReply(bot, update.Message.Chat.ID, "Ошибка отправки подтверждения")
 				}
-				return
 			}
+		} else {
+			log.Printf("Invalid function call format: %s", aiResponse)
+			SendReply(bot, update.Message.Chat.ID, "❌ Неверный формат вызова функции")
 		}
-
-		// Handle messages and output from JavaScript
-		messages, hasMessages := resultObj["messages"].([]interface{})
-		outputArray, hasOutput := resultObj["output"].([]interface{})
-
-		// Send messages to user if any
-		if hasMessages && len(messages) > 0 {
-			for _, msg := range messages {
-				if msgStr, ok := msg.(string); ok && msgStr != "" {
-					SendReply(bot, update.Message.Chat.ID, msgStr)
-					// Save each message to history
-					if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", msgStr); err != nil {
-						log.Printf("Error saving bot message: %v", err)
-					}
-				}
-			}
+	} else {
+		// This is a regular text response
+		log.Printf("💬 REGULAR TEXT RESPONSE for user %d: %s", user.ID, aiResponse)
+		SendReply(bot, update.Message.Chat.ID, aiResponse)
+		
+		// Save response to conversation history
+		if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", aiResponse); err != nil {
+			log.Printf("Error saving bot message: %v", err)
 		}
-
-		// If there's output data, pass it back to GPT for continuation
-		if hasOutput && len(outputArray) > 0 {
-			log.Printf("🔄 JavaScript returned %d output items, continuing GPT conversation", len(outputArray))
-
-			// Convert output array to strings and join for context message
-			var outputStrings []string
-			for _, item := range outputArray {
-				if itemStr, ok := item.(string); ok {
-					outputStrings = append(outputStrings, itemStr)
-				} else {
-					outputStrings = append(outputStrings, fmt.Sprintf("%v", item))
-				}
-			}
-			outputData := strings.Join(outputStrings, "\n")
-
-			// Add detailed output data to conversation context
-			outputMessage := fmt.Sprintf("Результат выполнения JavaScript кода:\n\nВызванный код вернул следующие данные через output():\n%s\n\nПроанализируй эти данные и продолжи диалог с пользователем.", outputData)
-			if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "system", outputMessage); err != nil {
-				log.Printf("Error saving JavaScript output to history: %v", err)
-			}
-
-			// Generate new AI response based on the output
-			messages, err := db.GetRecentMessages(update.Message.Chat.ID, 10)
-			if err != nil {
-				log.Printf("Error getting recent messages for continuation: %v", err)
-				return
-			}
-
-			// Send typing indicator while generating response
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			SendTypingWithContext(bot, update.Message.Chat.ID, ctx)
-
-			// Generate AI response with the new context - GPT should generate NEW JavaScript code
-			continueResponse, err := aiService.GenerateResponseWithContext(ctx, "Проанализируй данные из output() и сгенерируй НОВЫЙ JavaScript код для обработки этих данных", messages, "")
-			if err != nil {
-				log.Printf("Error generating continuation response: %v", err)
-				return
-			}
-
-			// Execute the NEW JavaScript code generated by GPT with prev_output array
-			log.Printf("🔄 EXECUTING NEW JS CODE generated by GPT for user %d", user.ID)
-			recParams := map[string]interface{}{
-				"code":        continueResponse,
-				"prev_output": outputArray, // Передаем массив output данных
-			}
-			recResult, err := executeJavaScriptDirect(db, user.ID, recParams)
-			if err == nil {
-				// Handle recursive result
-				var recObj map[string]interface{}
-				if json.Unmarshal([]byte(recResult), &recObj) == nil {
-					if recMessages, ok := recObj["messages"].([]interface{}); ok {
-						for _, msg := range recMessages {
-							if msgStr, ok := msg.(string); ok && msgStr != "" {
-								SendReply(bot, update.Message.Chat.ID, msgStr)
-								if err := db.SaveMessage(user.ID, update.Message.Chat.ID, "assistant", msgStr); err != nil {
-									log.Printf("Error saving recursive bot message: %v", err)
-								}
-							}
-						}
-					}
-				}
-			}
-			return
-		}
-
-		// If only messages were sent (no output), we're done
-		if hasMessages {
-			return
-		}
-	}
-
-	// Fallback: if no messages were sent, this might be an error or unexpected result
-	if jsResult != "" {
-		log.Printf("⚠️ JavaScript executed but no messages sent to user. Result: %s", jsResult)
-		SendReply(bot, update.Message.Chat.ID, "Код выполнен, но результат не был отправлен через message()")
 	}
 
 	// Cleanup old messages (keep last 50)

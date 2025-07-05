@@ -42,9 +42,235 @@ var pendingOperations = make(map[string]*PendingOperation)
 // GetGPTFunctions returns all available functions for GPT
 
 // GetGPTFunctions returns all available functions for GPT
-// Now returns empty list since all responses are treated as JavaScript code
 func GetGPTFunctions() []openai.FunctionDefinition {
-	return []openai.FunctionDefinition{}
+	return []openai.FunctionDefinition{
+		{
+			Name:        "list_projects",
+			Description: "Получить список проектов пользователя с их статусами и основной информацией",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Фильтр по статусу проекта (необязательно)",
+						"enum":        []string{"planning", "active", "paused", "completed", "cancelled"},
+					},
+				},
+			},
+		},
+		{
+			Name:        "create_project",
+			Description: "Создать новый проект с указанным названием и описанием",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "Название проекта",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "Описание проекта (необязательно)",
+					},
+				},
+				"required": []string{"title"},
+			},
+		},
+		{
+			Name:        "list_tasks",
+			Description: "Получить список задач пользователя с фильтрацией по проекту или статусу",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "ID проекта для фильтрации (необязательно)",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Фильтр по статусу задачи (необязательно)",
+						"enum":        []string{"todo", "in_progress", "done", "cancelled"},
+					},
+				},
+			},
+		},
+		{
+			Name:        "create_task",
+			Description: "Создать новую задачу в проекте",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "ID проекта для создания задачи",
+					},
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "Название задачи",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "Описание задачи (необязательно)",
+					},
+					"priority": map[string]interface{}{
+						"type":        "string",
+						"description": "Приоритет задачи (необязательно)",
+						"enum":        []string{"low", "medium", "high", "urgent"},
+					},
+					"deadline": map[string]interface{}{
+						"type":        "string",
+						"description": "Дедлайн задачи в формате YYYY-MM-DD (необязательно)",
+					},
+				},
+				"required": []string{"project_id", "title"},
+			},
+		},
+		{
+			Name:        "update_project",
+			Description: "Обновить существующий проект (название, описание или статус)",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "ID проекта для обновления",
+					},
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "Новое название проекта (необязательно)",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "Новое описание проекта (необязательно)",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Новый статус проекта (необязательно)",
+						"enum":        []string{"planning", "active", "paused", "completed", "cancelled"},
+					},
+				},
+				"required": []string{"project_id"},
+			},
+		},
+		{
+			Name:        "delete_project",
+			Description: "Удалить проект и все связанные с ним задачи",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "ID проекта для удаления",
+					},
+				},
+				"required": []string{"project_id"},
+			},
+		},
+		{
+			Name:        "update_task",
+			Description: "Обновить существующую задачу",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "ID задачи для обновления",
+					},
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "Новое название задачи (необязательно)",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "Новое описание задачи (необязательно)",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Новый статус задачи (необязательно)",
+						"enum":        []string{"todo", "in_progress", "done", "cancelled"},
+					},
+					"priority": map[string]interface{}{
+						"type":        "string",
+						"description": "Новый приоритет задачи (необязательно)",
+						"enum":        []string{"low", "medium", "high", "urgent"},
+					},
+					"deadline": map[string]interface{}{
+						"type":        "string",
+						"description": "Новый дедлайн в формате YYYY-MM-DD (необязательно)",
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "delete_task",
+			Description: "Удалить задачу",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "ID задачи для удаления",
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "set_current_project",
+			Description: "Установить текущий активный проект пользователя",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "ID проекта для установки как текущего",
+					},
+				},
+				"required": []string{"project_id"},
+			},
+		},
+		{
+			Name:        "get_current_project",
+			Description: "Получить информацию о текущем активном проекте пользователя",
+			Parameters: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "send_message_with_buttons",
+			Description: "Отправить сообщение с интерактивными кнопками для быстрых действий",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "Текст сообщения для отправки",
+					},
+					"buttons": map[string]interface{}{
+						"type":        "array",
+						"description": "Массив кнопок с текстом и действиями",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"text": map[string]interface{}{
+									"type":        "string",
+									"description": "Текст кнопки",
+								},
+								"action": map[string]interface{}{
+									"type":        "string",
+									"description": "Действие при нажатии кнопки",
+								},
+							},
+							"required": []string{"text", "action"},
+						},
+					},
+				},
+				"required": []string{"message", "buttons"},
+			},
+		},
+	}
 }
 
 // generateOperationID generates a unique ID for the operation
@@ -935,12 +1161,6 @@ func executeGetCurrentProject(db *DB, userID int, parameters map[string]interfac
 func ProcessGPTFunctionCall(userID int, chatID int64, functionCall *openai.FunctionCall) (*PendingOperation, error) {
 	log.Printf("🔧 GPT FUNCTION CALL: %s for user %d with args: %s", functionCall.Name, userID, functionCall.Arguments)
 
-	// Now we only support execute_javascript function
-	if functionCall.Name != "execute_javascript" {
-		log.Printf("❌ Unknown function: %s", functionCall.Name)
-		return nil, fmt.Errorf("unknown function: %s", functionCall.Name)
-	}
-
 	// Parse parameters
 	var parameters map[string]interface{}
 	if err := json.Unmarshal([]byte(functionCall.Arguments), &parameters); err != nil {
@@ -949,8 +1169,37 @@ func ProcessGPTFunctionCall(userID int, chatID int64, functionCall *openai.Funct
 	}
 
 	log.Printf("✅ Calling handler for function: %s", functionCall.Name)
-	// Call the handler for execute_javascript
-	return handleExecuteJavaScript(userID, chatID, parameters)
+	
+	// Route to appropriate handler based on function name
+	switch functionCall.Name {
+	case "list_projects":
+		return handleListProjects(userID, chatID, parameters)
+	case "create_project":
+		return handleCreateProject(userID, chatID, parameters)
+	case "update_project":
+		return handleUpdateProject(userID, chatID, parameters)
+	case "delete_project":
+		return handleDeleteProject(userID, chatID, parameters)
+	case "list_tasks":
+		return handleListTasks(userID, chatID, parameters)
+	case "create_task":
+		return handleCreateTask(userID, chatID, parameters)
+	case "update_task":
+		return handleUpdateTask(userID, chatID, parameters)
+	case "delete_task":
+		return handleDeleteTask(userID, chatID, parameters)
+	case "set_current_project":
+		return handleSetCurrentProject(userID, chatID, parameters)
+	case "get_current_project":
+		return handleGetCurrentProject(userID, chatID, parameters)
+	case "send_message_with_buttons":
+		return handleSendMessageWithButtons(userID, chatID, parameters)
+	case "execute_javascript":
+		return handleExecuteJavaScript(userID, chatID, parameters)
+	default:
+		log.Printf("❌ Unknown function: %s", functionCall.Name)
+		return nil, fmt.Errorf("unknown function: %s", functionCall.Name)
+	}
 }
 
 // executeListProjects executes list projects directly (no confirmation needed)
