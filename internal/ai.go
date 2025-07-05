@@ -115,13 +115,15 @@ func (p *OpenAIProvider) GenerateResponse(ctx context.Context, prompt string) (s
 
 // GenerateWelcomeMessage generates a personalized welcome message
 func (p *OpenAIProvider) GenerateWelcomeMessage(ctx context.Context, userName, status, timestamp string) (string, error) {
-	prompt := fmt.Sprintf(WelcomePromptTemplate, userName, status, timestamp)
+	// Use enhanced welcome prompt with more context
+	prompt := fmt.Sprintf(WelcomePromptV2, userName, status, "returning", timestamp, 0, "нет")
 	return p.GenerateResponse(ctx, prompt)
 }
 
 // GenerateErrorMessage generates a user-friendly error message
 func (p *OpenAIProvider) GenerateErrorMessage(ctx context.Context, errorContext string) (string, error) {
-	prompt := fmt.Sprintf(ErrorPromptTemplate, errorContext)
+	// Use enhanced error prompt with more context
+	prompt := fmt.Sprintf(ErrorPromptV2, "system", errorContext, "выполнить команду", "общий контекст")
 	return p.GenerateResponse(ctx, prompt)
 }
 
@@ -193,13 +195,13 @@ func (p *OpenAIProvider) GenerateResponseWithContextAndProject(ctx context.Conte
 	// Get available functions
 	openAIFunctions := GetGPTFunctions()
 
-	// Build enhanced system prompt with current project info
-	systemPrompt := GetSystemPrompt()
-	if currentProject != nil {
-		projectInfo := fmt.Sprintf("\n\nТЕКУЩИЙ ПРОЕКТ ПОЛЬЗОВАТЕЛЯ:\n- ID: %d\n- Название: %s\n- Описание: %s\n- Статус: %s\n- Роль пользователя: %s\n\nПри создании задач используй этот проект по умолчанию, если пользователь не указал другой проект явно.",
-			currentProject.ID, currentProject.Title, currentProject.Description, currentProject.Status, currentProject.UserRole)
-		systemPrompt += projectInfo
+	// Build enhanced system prompt with current project info using new adaptive system
+	promptCtx := &PromptContext{
+		HasProjects:    currentProject != nil,
+		CurrentProject: currentProject,
+		Capability:     "advanced", // Use advanced features for project context
 	}
+	systemPrompt := GetSystemPromptV2(promptCtx)
 
 	// Build message history
 	messages := []openai.ChatCompletionMessage{
@@ -563,4 +565,17 @@ func (p *ClaudeProvider) GenerateResponseWithContextAndProject(ctx context.Conte
 	response := resp.Content[0].Text
 	log.Printf("Claude Response with context and project generated: %d characters, history: %d messages", len(response), len(history))
 	return response, nil
+}
+
+// GetSystemPrompt returns the system prompt for AI interactions
+func GetSystemPrompt() string {
+	return GetSystemPromptV2(&PromptContext{
+		Capability: "basic",
+	})
+}
+
+// GetSystemPromptWithContext returns context-aware system prompt
+func GetSystemPromptWithContext(db *DB, userID int) string {
+	ctx := CreatePromptContext(db, userID)
+	return GetSystemPromptV2(ctx)
 }

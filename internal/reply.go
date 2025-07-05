@@ -213,7 +213,7 @@ func processTextMessage(bot *tgbotapi.BotAPI, db *DB, aiService *AIService, upda
 		currentProject = nil // Continue without current project context
 	}
 
-	// Generate AI response with conversation context and current project
+	// Generate AI response with conversation context and current project using adaptive prompts
 	aiResponse, err := aiService.GenerateResponseWithContextAndProject(ctx, messageText, history, currentProject, "Привет! Я помощник команды разработчиков. Как дела? 👋")
 
 	// Handle AI service errors
